@@ -13,6 +13,99 @@ import (
 	"testing"
 )
 
+// The side-by-side preset compares two files: both names in the title, both
+// files' lines in the card, change bands in the SVG.
+func TestSideBySide(t *testing.T) {
+	dir := t.TempDir()
+	oldDir := filepath.Join(dir, "v1")
+	newDir := filepath.Join(dir, "v2")
+	os.MkdirAll(oldDir, 0o755)
+	os.MkdirAll(newDir, 0o755)
+	oldPath := filepath.Join(oldDir, "alerts.go")
+	newPath := filepath.Join(newDir, "alerts.go")
+	os.WriteFile(oldPath, []byte("package a\n\nfunc one() int {\n\treturn 1\n}\n"), 0o644)
+	os.WriteFile(newPath, []byte("package a\n\nfunc one() int {\n\treturn 2\n}\n"), 0o644)
+	out := filepath.Join(dir, "cmp.svg")
+	var stdout bytes.Buffer
+	if err := run([]string{"--preset", "side-by-side", oldPath, newPath, "-o", out}, strings.NewReader(""), &stdout); err != nil {
+		t.Fatal(err)
+	}
+	svg, _ := os.ReadFile(out)
+	s := string(svg)
+	// Highlighting splits the rows into tokens; both sides are there.
+	for _, want := range []string{">return<", ">1<", ">2<", ">func<"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("output is missing %q", want)
+		}
+	}
+	// Same base name on both sides: the title is the shared name.
+	if !strings.Contains(s, ">alerts.go<") {
+		t.Error("two files with the same base name should share it as the title")
+	}
+	// The language came from the file names: keywords are highlighted.
+	if !strings.Contains(s, `fill="#bd93f9"`) {
+		t.Error("expected dracula keyword colors from the .go extension")
+	}
+
+	// A renamed file shows both names in the title.
+	otherPath := filepath.Join(dir, "other.go")
+	os.WriteFile(otherPath, []byte("package a\n"), 0o644)
+	if err := run([]string{"--preset", "side-by-side", oldPath, otherPath, "-o", out}, strings.NewReader(""), &stdout); err != nil {
+		t.Fatal(err)
+	}
+	svg, _ = os.ReadFile(out)
+	if !strings.Contains(string(svg), "alerts.go → other.go") {
+		t.Error("different names should both appear in the title")
+	}
+
+	// "-" reads one side from stdin.
+	if err := run([]string{"--preset", "side-by-side", "-", newPath, "-o", out}, strings.NewReader("package a\n"), &stdout); err != nil {
+		t.Fatal(err)
+	}
+	svg, _ = os.ReadFile(out)
+	if !strings.Contains(string(svg), "stdin → alerts.go") {
+		t.Error("stdin side should be named in the title")
+	}
+
+	// The built-in sample pair renders without any input files.
+	if err := run([]string{"--preset", "side-by-side", "--sample", "-o", out}, strings.NewReader(""), &stdout); err != nil {
+		t.Fatal(err)
+	}
+	svg, _ = os.ReadFile(out)
+	if !strings.Contains(string(svg), "before → after") || !strings.Contains(string(svg), "severityRank") {
+		t.Error("the sample pair should render both sides")
+	}
+}
+
+func TestSideBySideErrors(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "x.svg")
+	var stdout bytes.Buffer
+	one := filepath.Join(dir, "one.go")
+	os.WriteFile(one, []byte("package a\n"), 0o644)
+
+	if err := run([]string{"--preset", "side-by-side", one, "-o", out}, strings.NewReader(""), &stdout); err == nil {
+		t.Error("one file should be a usage error")
+	}
+	if err := run([]string{"--preset", "side-by-side", one, one, one, "-o", out}, strings.NewReader(""), &stdout); err == nil {
+		t.Error("three files should be a usage error")
+	}
+	if err := run([]string{"--preset", "side-by-side", "-", "-", "-o", out}, strings.NewReader("x"), &stdout); err == nil {
+		t.Error("stdin on both sides should be a usage error")
+	}
+	// Invalid encoding fails with a clear message.
+	bad := filepath.Join(dir, "bad.go")
+	os.WriteFile(bad, []byte("package a\n// caf\xe9\n"), 0o644)
+	err := run([]string{"--preset", "side-by-side", bad, one, "-o", out}, strings.NewReader(""), &stdout)
+	if err == nil || !strings.Contains(err.Error(), "UTF-8") {
+		t.Errorf("invalid encoding should fail clearly, got %v", err)
+	}
+	// An unknown language is still rejected.
+	if err := run([]string{"--preset", "side-by-side", "--lang", "nope-lang", one, one, "-o", out}, strings.NewReader(""), &stdout); err == nil {
+		t.Error("unknown language should fail")
+	}
+}
+
 func TestParseInterspersed(t *testing.T) {
 	cases := []struct {
 		args []string

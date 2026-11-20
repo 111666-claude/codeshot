@@ -5,9 +5,12 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/securekomodo/codeshot/internal/diff"
+	"github.com/securekomodo/codeshot/internal/highlight"
 	"github.com/securekomodo/codeshot/internal/preset"
 	"github.com/securekomodo/codeshot/internal/settings"
 	"github.com/securekomodo/codeshot/internal/theme"
@@ -31,7 +34,16 @@ func TestEveryPresetEveryTheme(t *testing.T) {
 			s := settings.Defaults(p)
 			s.Theme = th
 			s.Backdrop = theme.BackdropIDs()[(i+j)%len(theme.BackdropIDs())]
-			c, err := Build(s, sample)
+			var c *Card
+			if p.Render == preset.Split {
+				oldSample, newSample, err := p.SamplePair()
+				if err != nil {
+					t.Fatal(err)
+				}
+				c, err = BuildDiff(s, oldSample, newSample)
+			} else {
+				c, err = Build(s, sample)
+			}
 			if err != nil {
 				t.Fatalf("%s/%s: %v", p.Key, th, err)
 			}
@@ -101,5 +113,99 @@ func TestBuildErrors(t *testing.T) {
 	s.Theme = "nope"
 	if _, err := Build(s, "x"); err == nil {
 		t.Error("unknown theme should fail")
+	}
+	sp, _ := preset.Get("side-by-side")
+	if _, err := Build(settings.Defaults(sp), "x"); err == nil {
+		t.Error("the side-by-side preset should refuse a single input")
+	}
+}
+
+// The side-by-side card: both files keep their line numbers and syntax
+// highlighting, changes are marked on their side, and the alignment,
+// encoding and size limits give clear errors.
+func TestBuildDiff(t *testing.T) {
+	p, _ := preset.Get("side-by-side")
+	s := settings.Defaults(p)
+	s.Language = "go"
+
+	before := "package a\n\nfunc one() int {\n\treturn 1\n}\n"
+	after := "package a\n\nfunc one() int {\n\treturn 2\n}\n\nfunc two() {}\n"
+	c, err := BuildDiff(s, before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	L := c.Layout
+	// Both panes draw every row, and both gutters carry source line numbers.
+	if len(L.Rows) != 2*7 {
+		t.Errorf("rows = %d, want 2 per aligned row", len(L.Rows))
+	}
+	var gutter []string
+	for _, g := range L.Gutter {
+		gutter = append(gutter, g.Text)
+	}
+	for _, want := range []string{"1", "4", "6", "7"} {
+		if !slices.Contains(gutter, want) {
+			t.Errorf("gutter %v is missing line number %s", gutter, want)
+		}
+	}
+	// The changed return line is tinted on both sides; the added function
+	// only on the right. Plus the divider hairline.
+	var delBands, addBands, other int
+	for _, b := range L.Bands {
+		switch b.Fill.Hex {
+		case highlight.Red:
+			delBands++
+		case highlight.Teal:
+			addBands++
+		default:
+			other++
+		}
+	}
+	if delBands == 0 || addBands == 0 || other == 0 {
+		t.Errorf("bands: %d deleted, %d added, %d other", delBands, addBands, other)
+	}
+	// Syntax highlighting survived: the keyword "func" is colored, not plain.
+	var colored bool
+	for _, r := range L.Rows {
+		for _, sp := range r.Spans {
+			if sp.Text == "func" && sp.Color != "" {
+				colored = true
+			}
+		}
+	}
+	if !colored {
+		t.Error("changed lines should keep their syntax colors")
+	}
+	if _, err := c.PNG(1); err != nil {
+		t.Fatal(err)
+	}
+
+	// CRLF against LF is no change at all: only the divider band remains.
+	c, err = BuildDiff(s, "a\r\nb\r\n", "a\nb\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Layout.Bands) != 1 {
+		t.Errorf("newline-only difference should mark nothing, got %d bands", len(c.Layout.Bands))
+	}
+
+	// An empty side is pure insertions; two empty sides are an empty card.
+	c, err = BuildDiff(s, "", "x\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Layout.Rows) != 2 || len(c.Layout.Gutter) != 1 {
+		t.Errorf("empty old side: rows %d gutter %d", len(c.Layout.Rows), len(c.Layout.Gutter))
+	}
+	if _, err := BuildDiff(s, "", ""); err != nil {
+		t.Errorf("two empty files should still render: %v", err)
+	}
+
+	// Invalid encoding and oversize inputs fail with a named side.
+	if _, err := BuildDiff(s, "caf\xe9", "x"); err == nil || !strings.Contains(err.Error(), "old input") {
+		t.Errorf("invalid encoding: %v", err)
+	}
+	if _, err := BuildDiff(s, "x", strings.Repeat("y", diff.MaxInputBytes+1)); err == nil || !strings.Contains(err.Error(), "new input") {
+		t.Errorf("oversize: %v", err)
 	}
 }

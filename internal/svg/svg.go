@@ -76,6 +76,10 @@ func Render(L *layout.Layout, o Options) []byte {
 	if L.Chrome != nil {
 		w.chrome(L.Chrome)
 	}
+	for _, b := range L.Bands {
+		w.printf(`<rect x="%s" y="%s" width="%s" height="%s"%s/>`,
+			num(b.Box.X), num(b.Box.Y), num(b.Box.W), num(b.Box.H), fill(b.Fill))
+	}
 	for _, g := range L.Gutter {
 		w.text(g)
 	}

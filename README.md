@@ -225,6 +225,7 @@ Each preset sets the render mode, title and language. Add <code>--sample</code> 
 </tr><tr>
 <td align="center" valign="top"><a href="docs/presets/ascii-tree.png"><img src="docs/presets/ascii-tree.png" width="290" alt="ASCII tree"></a><br><b>ASCII tree</b><br><sub><code>--preset ascii-tree</code></sub></td>
 <td align="center" valign="top"><a href="docs/presets/perf-metrics.png"><img src="docs/presets/perf-metrics.png" width="290" alt="Metrics"></a><br><b>Metrics</b><br><sub><code>--preset perf-metrics</code></sub></td>
+<td align="center" valign="top"><a href="docs/presets/side-by-side.png"><img src="docs/presets/side-by-side.png" width="290" alt="Side-by-side diff"></a><br><b>Side-by-side</b><br><sub><code>--preset side-by-side OLD NEW</code></sub></td>
 </tr></table>
 
 ## Recipes
@@ -232,6 +233,10 @@ Each preset sets the render mode, title and language. Add <code>--sample</code> 
 ```sh
 # Share what you just changed (the diff preset is picked from the content)
 git diff | codeshot --title "fix: retry on 429" --copy
+
+# Two versions of a file, lined up side by side — for release notes and reviews
+codeshot --preset side-by-side old/alerts.js new/alerts.js -o docs/review.png
+git show HEAD~3:alerts.js | codeshot --preset side-by-side - alerts.js -o docs/review.png
 
 # A whole shell session, with commands and output highlighted
 script -q /dev/null | tee session.txt; codeshot --preset terminal session.txt
@@ -310,7 +315,8 @@ codeshot [flags] [FILE]        FILE omitted or "-" reads stdin; flags may come b
                       (default <title-slug>.png; a temp file with --copy)
 --preset KEY          code (default), terminal, api, error-log, db-schema, sql-query, regex,
                       git-commit, project-structure, env-vars, terminal-session, dev-milestone,
-                      http-request, git-diff, test-results, ascii-tree, perf-metrics
+                      http-request, git-diff, side-by-side, test-results, ascii-tree, perf-metrics
+                      (side-by-side reads two files: OLD NEW, "-" reads stdin on one side)
 --sample              render the preset's built-in sample instead of reading input
 --lang ID             language for the code presets (default: the preset's, or guessed
                       from the file name; --list languages)
@@ -362,6 +368,9 @@ No. There is no network code in the binary at all. Highlighting, layout and rast
 
 **How does it know what I piped in?**
 It looks: <code>diff --git</code> headers, <code>commit</code> lines, <code>$</code> prompts, valid JSON, tree branches, <code>KEY=VALUE</code> lines, an HTTP request line, pass/fail marks, or timestamps and log levels. Anything else is treated as code. <code>--preset</code> or <code>--lang</code> always wins.
+
+**Can it compare two files side by side?**
+Yes: <code>codeshot --preset side-by-side OLD NEW</code> (<code>-</code> reads stdin on one side). The two files are lined up by a Myers diff and drawn in two panes, each with its own line numbers and syntax highlighting; deleted lines are tinted red on the left, inserted ones teal on the right, and long lines wrap inside their pane without losing the alignment. Inputs must be UTF-8, at most 8 MB and 20,000 lines each, and line up to at most 1,000 rows — larger changes belong in the <code>git-diff</code> preset.
 
 **Which languages are supported?**
 JavaScript, TypeScript, JSX, TSX, Python, Go, Rust, C, C++, Swift, Kotlin, JSON, YAML, SQL, GraphQL, CSS, HTML, Markdown, PowerShell and Batch have theme-tuned highlighting. Any other name chroma knows (<code>bash</code>, <code>toml</code>, <code>dockerfile</code>, <code>diff</code>, dozens more) works too.

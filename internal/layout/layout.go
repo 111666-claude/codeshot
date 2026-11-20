@@ -102,6 +102,7 @@ type Input struct {
 	Title    *fonts.Face      // title bar text (Inter); nil falls back to Code
 	Badge    *fonts.Face      // badge text (JetBrains Mono); nil falls back to Code
 	Lines    []highlight.Line // one per logical line, tabs already expanded
+	Diff     *DiffInput       // side-by-side preset: aligned rows instead of Lines
 	Image    *WatermarkImage  // optional overlay
 }
 
@@ -123,6 +124,13 @@ type Text struct {
 type Row struct {
 	X, Y  float64 // baseline origin (X is the center when Layout.Center)
 	Spans highlight.Line
+}
+
+// Band is a tinted strip behind the rows: the change markers of the
+// side-by-side preset and the hairline between its panes.
+type Band struct {
+	Box  Rect
+	Fill theme.Color
 }
 
 // Dot is one traffic light.
@@ -204,10 +212,14 @@ type Layout struct {
 	Center         bool // milestone: rows are centered
 	Gutter         []Text
 	Rows           []Row
+	Bands          []Band // tints behind the rows (the side-by-side markers)
 }
 
 // Compute lays out the card.
 func Compute(in Input) (*Layout, error) {
+	if in.Diff != nil {
+		return computeDiff(in)
+	}
 	s := in.Settings
 	milestone := s.Preset.Render == preset.Milestone
 	size := float64(s.FontSize)

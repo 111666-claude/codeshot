@@ -1,4 +1,4 @@
-// Package preset holds the seventeen "tool" presets: each fixes a render
+// Package preset holds the eighteen "tool" presets: each fixes a render
 // mode, a default title, and for the syntax-highlighted ones a language,
 // plus a built-in sample snippet.
 package preset
@@ -10,7 +10,8 @@ import (
 )
 
 // Render modes. Prism runs the syntax highlighter; the others are the
-// site's per-line colorizers, and Milestone only changes the layout.
+// site's per-line colorizers, and Milestone only changes the layout. Split
+// is the side-by-side diff, which reads two inputs instead of one.
 const (
 	Prism     = "prism"
 	Terminal  = "terminal"
@@ -23,6 +24,7 @@ const (
 	Test      = "test"
 	Metrics   = "metrics"
 	Milestone = "milestone"
+	Split     = "split"
 )
 
 // Preset is one tool preset.
@@ -54,6 +56,7 @@ var All = []Preset{
 	{"dev-milestone", Milestone, "milestone", "", "", "large centered text, no window"},
 	{"http-request", HTTP, "request.http", "", "", "an HTTP request"},
 	{"git-diff", Diff, "changes.diff", "", "", "a unified diff"},
+	{"side-by-side", Split, "before → after", "", "", "two files lined up as a diff: codeshot --preset side-by-side OLD NEW"},
 	{"test-results", Test, "npm test", "", "", "test output, colored by pass and fail"},
 	{"ascii-tree", Tree, "tree", "", "", "any box-drawing tree"},
 	{"perf-metrics", Metrics, "lighthouse", "", "", "labelled scores and timings"},
@@ -81,13 +84,32 @@ func Keys() []string {
 	return keys
 }
 
-// Sample returns the preset's built-in demo snippet.
+// Sample returns the preset's built-in demo snippet. For the side-by-side
+// preset it is the "after" file; SamplePair has both sides.
 func (p Preset) Sample() (string, error) {
+	if p.Render == Split {
+		_, after, err := p.SamplePair()
+		return after, err
+	}
 	b, err := samples.ReadFile("samples/" + p.Key + ".txt")
 	if err != nil {
 		return "", fmt.Errorf("no sample for preset %q: %w", p.Key, err)
 	}
 	return string(b), nil
+}
+
+// SamplePair returns the before and after samples of the side-by-side
+// preset.
+func (p Preset) SamplePair() (before, after string, err error) {
+	b, err := samples.ReadFile("samples/" + p.Key + "-old.txt")
+	if err != nil {
+		return "", "", fmt.Errorf("no before-sample for preset %q: %w", p.Key, err)
+	}
+	a, err := samples.ReadFile("samples/" + p.Key + "-new.txt")
+	if err != nil {
+		return "", "", fmt.Errorf("no after-sample for preset %q: %w", p.Key, err)
+	}
+	return string(b), string(a), nil
 }
 
 // IsTerminal reports whether the preset is one of the two terminal tabs,
@@ -97,9 +119,9 @@ func (p Preset) IsTerminal() bool {
 }
 
 // SupportsLineNumbers reports whether the preset can show a line-number
-// gutter (only the Prism and log renderers do).
+// gutter (the Prism and log renderers do; side-by-side numbers both panes).
 func (p Preset) SupportsLineNumbers() bool {
-	return p.Render == Prism || p.Render == Log
+	return p.Render == Prism || p.Render == Log || p.Render == Split
 }
 
 // String lists the keys, for error messages.

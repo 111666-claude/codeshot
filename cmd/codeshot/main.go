@@ -55,6 +55,7 @@ Usage:
 Examples:
   codeshot alerts.js                     render a file; the language comes from its name
   git diff | codeshot                    pipe anything in; the preset is detected
+  codeshot --preset side-by-side a.go b.go   compare two files, old and new side by side
   codeshot --preset terminal --sample    try a preset with its built-in sample
   codeshot --theme nightOwl --bg tide schema.sql
   codeshot --copy notes.md               straight to the clipboard
@@ -67,6 +68,9 @@ Input:
 %s
                          any other lexer name works too, such as bash, toml or dockerfile
   --sample               render the preset's built-in sample instead of reading input
+
+  The side-by-side preset reads two files: OLD NEW ("-" reads stdin on one
+  side). Everything else reads one file, or stdin when it is omitted or "-".
 
 Appearance:
   --theme ID             syntax theme (default dracula), or random; --list themes
@@ -240,31 +244,54 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return nil
 	case o.list != "":
 		return list(stdout, o.list)
-	case len(positional) > 1:
-		return usageError{fmt.Errorf("expected at most one input file, got %d", len(positional))}
 	}
 
 	p, ok := preset.Get(o.presetKey)
 	if !ok {
 		return usageError{fmt.Errorf("unknown preset %q (one of %s)", o.presetKey, preset.String())}
 	}
-
-	file := ""
-	if len(positional) == 1 && positional[0] != "-" {
-		file = positional[0]
+	split := p.Render == preset.Split
+	switch {
+	case split && len(positional) > 2:
+		return usageError{fmt.Errorf("the %s preset compares two files, got %d", p.Key, len(positional))}
+	case !split && len(positional) > 1:
+		return usageError{fmt.Errorf("expected at most one input file, got %d", len(positional))}
 	}
-	src, err := readInput(p, o.sample, file, len(positional) == 1, stdin)
-	if err != nil {
-		return err
+
+	// The side-by-side preset reads two inputs; everything else reads one.
+	var src, oldSrc, newSrc, oldName, newName string
+	file := ""
+	if split {
+		var err error
+		oldSrc, newSrc, oldName, newName, err = readPair(p, o.sample, positional, stdin)
+		if err != nil {
+			return err
+		}
+	} else {
+		if len(positional) == 1 && positional[0] != "-" {
+			file = positional[0]
+		}
+		var err error
+		src, err = readInput(p, o.sample, file, len(positional) == 1, stdin)
+		if err != nil {
+			return err
+		}
 	}
 	// With no preset or language asked for, and no file extension to go by,
 	// look at the content: a diff, a git log, a terminal session, JSON, a
 	// tree, an .env file, HTTP, test output or a log each get their preset.
 	guessed := ""
-	if file != "" {
+	switch {
+	case split:
+		// Both files are usually the same language; try the new name first.
+		guessed = highlight.DetectLanguage(newName)
+		if guessed == "" {
+			guessed = highlight.DetectLanguage(oldName)
+		}
+	case file != "":
 		guessed = highlight.DetectLanguage(file)
 	}
-	if !seen["preset"] && !seen["lang"] && !o.sample && (guessed == "" || guessed == "plaintext") {
+	if !split && !seen["preset"] && !seen["lang"] && !o.sample && (guessed == "" || guessed == "plaintext") {
 		p = sniff.Lookup(src, p)
 	}
 	s := settings.Defaults(p)
@@ -356,21 +383,35 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	switch {
 	case seen["lang"]:
 		s.Language = o.lang
-	case p.Key == preset.Default && guessed != "":
+	case (p.Key == preset.Default || split) && guessed != "":
 		s.Language = guessed
 	}
-	if p.Render == preset.Prism && !highlight.KnownLanguage(s.Language) {
+	if (p.Render == preset.Prism || split) && !highlight.KnownLanguage(s.Language) {
 		return usageError{fmt.Errorf("unknown language %q (see --list languages)", s.Language)}
 	}
-	if !seen["title"] && p.Key == preset.Default {
-		if file != "" {
-			s.Title = filepath.Base(file)
-		} else if ext := highlight.Ext(s.Language); ext != "" {
-			// No file to name it after, so name it after the language.
-			s.Title = "snippet" + ext
+	if !seen["title"] {
+		switch {
+		case split && !o.sample:
+			// Name the window after the two files, or the one name they share.
+			s.Title = oldName + " → " + newName
+			if oldName == newName {
+				s.Title = oldName
+			}
+		case p.Key == preset.Default:
+			if file != "" {
+				s.Title = filepath.Base(file)
+			} else if ext := highlight.Ext(s.Language); ext != "" {
+				// No file to name it after, so name it after the language.
+				s.Title = "snippet" + ext
+			}
 		}
 	}
-	card, err := render.Build(s, src)
+	var card *render.Card
+	if split {
+		card, err = render.BuildDiff(s, oldSrc, newSrc)
+	} else {
+		card, err = render.Build(s, src)
+	}
 	if err != nil {
 		return err
 	}
@@ -553,6 +594,43 @@ func readInput(p preset.Preset, sample bool, file string, hasArg bool, stdin io.
 		return "", err
 	}
 	return string(b), nil
+}
+
+// readPair reads the two inputs of the side-by-side preset: two files, one
+// of which may be "-" for stdin, or the built-in before/after samples. It
+// also reports the display names of the two sides for the window title.
+func readPair(p preset.Preset, sample bool, positional []string, stdin io.Reader) (oldSrc, newSrc, oldName, newName string, err error) {
+	if sample {
+		oldSrc, newSrc, err = p.SamplePair()
+		return oldSrc, newSrc, "before", "after", err
+	}
+	if len(positional) != 2 {
+		return "", "", "", "", usageError{fmt.Errorf("the %s preset compares two files: codeshot --preset %s OLD NEW (- reads stdin on one side)", p.Key, p.Key)}
+	}
+	if positional[0] == "-" && positional[1] == "-" {
+		return "", "", "", "", usageError{errors.New("only one side of the comparison can be stdin")}
+	}
+	read := func(arg string) (string, error) {
+		if arg == "-" {
+			b, err := io.ReadAll(stdin)
+			return string(b), err
+		}
+		b, err := os.ReadFile(arg)
+		return string(b), err
+	}
+	if oldSrc, err = read(positional[0]); err != nil {
+		return "", "", "", "", err
+	}
+	if newSrc, err = read(positional[1]); err != nil {
+		return "", "", "", "", err
+	}
+	name := func(arg string) string {
+		if arg == "-" {
+			return "stdin"
+		}
+		return filepath.Base(arg)
+	}
+	return oldSrc, newSrc, name(positional[0]), name(positional[1]), nil
 }
 
 func list(w io.Writer, what string) error {

@@ -1,0 +1,23 @@
+// alerts.js — fetch weather alerts and notify subscribers
+const API = "https://api.weather.example.com/v2/alerts?region=eu-west&severity=moderate-or-higher&format=geojson";
+
+export function severityRank(level) {
+  return { info: 0, moderate: 1, severe: 2, extreme: 3 }[level] ?? -1;
+}
+
+export async function fetchAlerts(region) {
+  const res = await fetch(`${API}&area=${region}`);
+  if (!res.ok) {
+    throw new Error(`alerts fetch failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export function filterUrgent(alerts) {
+  return alerts.filter((a) => severityRank(a.severity) >= 2);
+}
+
+export function summarize(alerts) {
+  const urgent = filterUrgent(alerts);
+  return `${urgent.length} of ${alerts.length} alerts are urgent`;
+}
